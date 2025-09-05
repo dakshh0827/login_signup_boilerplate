@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("MONGODB_URI")
+}
+
+model User {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  email     String   @unique
+  phone     String?  // REMOVED @unique - This was causing the MongoDB error
+  password  String
+  firstName String
+  lastName  String
+  isActive  Boolean  @default(true)
+  isVerified Boolean @default(false)
+  
+  avatar               String?
+  provider             String?  @default("local")
+  providerId           String?
+  verificationToken    String?
+  verificationExpires  DateTime?
+  resetPasswordToken   String?
+  resetPasswordExpires DateTime?
+  refreshToken         String?
+  
+  latitude  Float?
+  longitude Float?
+  address   String?
+  city      String?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("users")
+}
+
+model OTPCode {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  email     String
+  code      String
+  type      String   // 'verification' or 'password_reset'
+  verified  Boolean  @default(false)
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("otp_codes")
+}
