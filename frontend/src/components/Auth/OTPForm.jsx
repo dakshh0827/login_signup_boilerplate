@@ -1,5 +1,5 @@
-// src/components/Auth/OTPForm.jsx - COMPLETELY FIXED VERSION
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+// src/components/Auth/OTPForm.jsx - FIXED VERSION (Proper API Integration)
+import React, { useState, useRef, useEffect } from 'react';
 import Button from '../UI/Button';
 import { useAuth } from '../../context/AuthContext';
 
@@ -13,100 +13,148 @@ const OTPForm = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [resendLoading, setResendLoading] = useState(false);
-  const [timer, setTimer] = useState(60);
-  const [canResend, setCanResend] = useState(false); // ADDED: State to control resend button
+  const [timer, setTimer] = useState(0);
   const [successMessage, setSuccessMessage] = useState('');
+  const [hasInitialSend, setHasInitialSend] = useState(false);
   const inputRefs = useRef([]);
-  const { verifyOTP, resendOTP, verifyResetOTP } = useAuth();
+  const { verifyOTP, resendOTP, verifyResetOTP, sendVerificationEmail } = useAuth();
 
-  // CRITICAL: Prevent infinite loops
+  // Use refs to prevent multiple API calls
   const hasAutoSent = useRef(false);
-  const isMounted = useRef(true);
   const isSubmitting = useRef(false);
-  const currentEmail = useRef(email);
+  const lastSentEmail = useRef('');
 
-  // FIXED: Reset auto-send flag when email changes
+  // Auto-send OTP only once per email - using proper send endpoint
   useEffect(() => {
-    if (currentEmail.current !== email) {
-      console.log('Email changed, resetting auto-send flag');
-      hasAutoSent.current = false;
-      currentEmail.current = email;
-    }
-  }, [email]);
-
-  // FIXED: Auto-send OTP only once per email
-  useEffect(() => {
-    if (!email?.trim() || hasAutoSent.current || resendLoading) {
+    // Skip if no email or already sent for this email
+    if (!email?.trim() || hasAutoSent.current || lastSentEmail.current === email.trim()) {
       return;
     }
 
-    console.log('Auto-sending OTP to:', email);
+    console.log('Auto-sending initial OTP to:', email);
     hasAutoSent.current = true;
-    handleResend(true);
+    lastSentEmail.current = email.trim();
+    
+    const sendInitialOTP = async () => {
+      if (resendLoading || hasInitialSend) {
+        console.log('Already sending or initial send done, skipping...');
+        return;
+      }
 
-    return () => {
-      isMounted.current = false;
+      setResendLoading(true);
+      setError('');
+      
+      try {
+        let response;
+        
+        // Use proper initial send method instead of resend
+        if (type === 'password_reset') {
+          // For password reset, use resend method as it's the initial send
+          response = await resendOTP(email.trim(), 'password_reset');
+        } else {
+          // For verification, use the dedicated send method if available
+          if (sendVerificationEmail) {
+            response = await sendVerificationEmail(email.trim());
+          } else {
+            // Fallback to resend method
+            response = await resendOTP(email.trim(), 'verification');
+          }
+        }
+        
+        if (response?.success) {
+          setTimer(60);
+          setHasInitialSend(true);
+          console.log('Initial OTP sent successfully');
+        } else {
+          setError(response?.message || 'Failed to send verification code');
+        }
+      } catch (err) {
+        console.error('Auto-send OTP error:', err);
+        setError('Failed to send verification code');
+      } finally {
+        setResendLoading(false);
+      }
     };
+    
+    // Send immediately without delay
+    sendInitialOTP();
+  }, [email, type, resendOTP, sendVerificationEmail, resendLoading, hasInitialSend]);
+
+  // Reset states when email changes
+  useEffect(() => {
+    if (lastSentEmail.current && lastSentEmail.current !== email?.trim()) {
+      console.log('Email changed, resetting states');
+      
+      // Reset all states
+      setTimer(0);
+      setError('');
+      setSuccessMessage('');
+      setOtp(['', '', '', '', '', '']);
+      setHasInitialSend(false);
+      
+      // Reset the auto-send flags for new email
+      hasAutoSent.current = false;
+      lastSentEmail.current = '';
+    }
   }, [email]);
 
-  // FIXED: Timer countdown with proper canResend state management
+  // Timer countdown
   useEffect(() => {
     if (timer > 0) {
       const interval = setInterval(() => {
         setTimer(prev => {
           if (prev <= 1) {
-            setCanResend(true); // CRITICAL: Enable resend button when timer hits 0
             return 0;
           }
           return prev - 1;
         });
       }, 1000);
       return () => clearInterval(interval);
-    } else {
-      setCanResend(true); // Ensure canResend is true when timer is 0
     }
   }, [timer]);
 
-  const handleChange = useCallback((index, value) => {
-    if (value.length > 1) return;
+  const handleChange = (index, value) => {
+    if (value.length > 1 || (value && !/^\d$/.test(value))) return;
     
     const newOtp = [...otp];
     newOtp[index] = value;
     setOtp(newOtp);
     
     if (value && index < 5) {
-      inputRefs.current[index + 1]?.focus();
+      setTimeout(() => {
+        inputRefs.current[index + 1]?.focus();
+      }, 0);
     }
     
-    // Clear messages when typing
-    setError('');
-    setSuccessMessage('');
-  }, [otp]);
+    if (error) setError('');
+    if (successMessage) setSuccessMessage('');
+  };
 
-  const handleKeyDown = useCallback((index, e) => {
+  const handleKeyDown = (index, e) => {
     if (e.key === 'Backspace' && !otp[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
+      setTimeout(() => {
+        inputRefs.current[index - 1]?.focus();
+      }, 0);
     }
-  }, [otp]);
+  };
 
-  const handlePaste = useCallback((e) => {
+  const handlePaste = (e) => {
     e.preventDefault();
     const pastedData = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
     const newOtp = Array(6).fill('').map((_, i) => pastedData[i] || '');
     setOtp(newOtp);
     
-    const nextEmptyIndex = newOtp.findIndex((digit, i) => !digit && i < 6);
+    const nextEmptyIndex = newOtp.findIndex(digit => !digit);
     const focusIndex = nextEmptyIndex !== -1 ? nextEmptyIndex : 5;
-    inputRefs.current[focusIndex]?.focus();
-  }, []);
+    setTimeout(() => {
+      inputRefs.current[focusIndex]?.focus();
+    }, 0);
+  };
 
-  // FIXED: Prevent multiple submissions and ensure loading is reset
-  const handleSubmit = useCallback(async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Prevent multiple submissions
     if (isSubmitting.current || loading) {
-      console.log('Already submitting, skipping...');
       return;
     }
 
@@ -128,7 +176,7 @@ const OTPForm = ({
     setSuccessMessage('');
 
     try {
-      console.log('Submitting OTP:', { email: email.trim(), otp: otpString, type });
+      console.log('Verifying OTP:', { email: email.trim(), otp: otpString, type });
       
       let response;
       
@@ -144,95 +192,78 @@ const OTPForm = ({
         setSuccessMessage('Verification successful!');
         setError('');
         
-        // Call success handler
-        onSuccess?.(response);
+        if (onSuccess) {
+          onSuccess(response);
+        }
       } else {
         const errorMsg = response?.message || response?.error || 'Invalid OTP. Please try again.';
         setError(errorMsg);
         setOtp(['', '', '', '', '', '']);
-        inputRefs.current[0]?.focus();
+        setTimeout(() => {
+          inputRefs.current[0]?.focus();
+        }, 0);
       }
     } catch (err) {
       console.error('OTP verification error:', err);
       const errorMsg = err.response?.data?.message || err.message || 'Invalid OTP. Please try again.';
       setError(errorMsg);
       setOtp(['', '', '', '', '', '']);
-      inputRefs.current[0]?.focus();
+      setTimeout(() => {
+        inputRefs.current[0]?.focus();
+      }, 0);
     } finally {
-      // CRITICAL: Always reset loading states
-      if (isMounted.current) {
-        setLoading(false);
-        isSubmitting.current = false;
-      }
+      setLoading(false);
+      isSubmitting.current = false;
     }
-  }, [otp, email, type, verifyOTP, verifyResetOTP, onSuccess, loading]);
+  };
 
-  // FIXED: Prevent multiple simultaneous resend requests with proper state management
-  const handleResend = useCallback(async (isAutoSend = false) => {
+  const handleResend = async () => {
     if (!email?.trim()) {
-      if (!isAutoSend) {
-        setError('Email is required to resend OTP');
-      }
+      setError('Email is required to resend OTP');
       return;
     }
 
-    // CRITICAL: Prevent parallel resend requests
-    if (resendLoading) {
-      console.log('Resend already in progress, skipping...');
+    if (resendLoading || timer > 0) {
       return;
     }
 
-    // For manual resend, check if resend is allowed
-    if (!isAutoSend && !canResend) {
-      setError(`Please wait ${timer} seconds before requesting another code`);
-      return;
-    }
-
-    console.log('Resending OTP:', { email, type, isAutoSend });
     setResendLoading(true);
-    setCanResend(false); // CRITICAL: Disable resend button during request
     setError('');
     setSuccessMessage('');
     
     try {
       const otpType = type === 'password_reset' ? 'password_reset' : 'verification';
+      console.log('Resending OTP:', { email: email.trim(), type: otpType });
+      
       const response = await resendOTP(email.trim(), otpType);
       
-      console.log('Resend OTP response:', response);
-      
       if (response?.success) {
-        setTimer(60); // Reset timer to 60 seconds
-        setCanResend(false); // Keep disabled until timer runs out
+        setTimer(60);
+        setSuccessMessage('New verification code sent!');
         
-        if (!isAutoSend) {
-          setSuccessMessage('New verification code sent!');
-          onResend?.();
-          
-          setTimeout(() => {
-            if (isMounted.current) {
-              setSuccessMessage('');
-            }
-          }, 3000);
+        if (onResend) {
+          onResend();
         }
         
+        setTimeout(() => {
+          setSuccessMessage('');
+        }, 3000);
+        
         setOtp(['', '', '', '', '', '']);
-        inputRefs.current[0]?.focus();
+        setTimeout(() => {
+          inputRefs.current[0]?.focus();
+        }, 100);
       } else {
         setError(response?.message || 'Failed to send verification code');
-        setCanResend(true); // Re-enable on failure
       }
     } catch (err) {
       console.error('Resend OTP error:', err);
       const errorMsg = err.response?.data?.message || err.message || 'Failed to resend verification code';
       setError(errorMsg);
-      setCanResend(true); // Re-enable on error
     } finally {
-      // CRITICAL: Always reset resend loading
-      if (isMounted.current) {
-        setResendLoading(false);
-      }
+      setResendLoading(false);
     }
-  }, [email, timer, canResend, type, resendOTP, onResend, resendLoading]);
+  };
 
   if (!email?.trim()) {
     return (
@@ -250,6 +281,9 @@ const OTPForm = ({
     const action = type === 'password_reset' ? 'reset code' : 'verification code';
     return `We've sent a 6-digit ${action} to ${email}`;
   };
+
+  const isSubmitDisabled = otp.join('').length !== 6 || loading;
+  const canResend = timer === 0 && !resendLoading && !loading;
 
   return (
     <div className="w-full max-w-md mx-auto">
@@ -269,7 +303,7 @@ const OTPForm = ({
               pattern="[0-9]*"
               maxLength={1}
               value={digit}
-              onChange={(e) => handleChange(index, e.target.value.replace(/\D/, ''))}
+              onChange={(e) => handleChange(index, e.target.value)}
               onKeyDown={(e) => handleKeyDown(index, e)}
               onPaste={index === 0 ? handlePaste : undefined}
               className="w-12 h-12 text-center text-xl font-semibold border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
@@ -295,42 +329,33 @@ const OTPForm = ({
           type="submit"
           className="w-full"
           loading={loading}
-          disabled={otp.join('').length !== 6 || loading || resendLoading}
+          disabled={isSubmitDisabled}
         >
           {loading ? 'Verifying...' : (type === 'password_reset' ? 'Verify Code' : 'Verify Email')}
         </Button>
 
-        {/* FIXED: Resend button with proper state management */}
         <div className="text-center space-y-2">
           <p className="text-sm text-gray-600">
             Didn't receive the code?
           </p>
           
-          {!canResend && timer > 0 ? (
+          {timer > 0 ? (
             <p className="text-sm text-gray-500">
               Resend in {timer}s
             </p>
           ) : (
             <button
               type="button"
-              onClick={() => handleResend(false)}
-              disabled={!canResend || resendLoading || loading}
+              onClick={handleResend}
+              disabled={!canResend}
               className={`text-sm font-medium transition-colors ${
-                (!canResend || resendLoading || loading)
+                !canResend
                   ? 'text-gray-400 cursor-not-allowed'
                   : 'text-blue-600 hover:text-blue-800 cursor-pointer'
               }`}
             >
               {resendLoading ? 'Sending...' : 'Resend Code'}
             </button>
-          )}
-          
-          {/* Show loading indicator during resend */}
-          {resendLoading && (
-            <div className="flex justify-center items-center space-x-2 text-sm text-blue-600">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-              <span>Sending new code...</span>
-            </div>
           )}
         </div>
       </form>
